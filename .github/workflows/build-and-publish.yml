@@ -1,0 +1,72 @@
+name: Build and publish image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - Yolk/**
+      - sandbox-pterodactyl.json
+      - sandbox-pelican.json
+      - .github/workflows/build-and-publish.yml
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 */3 * *" # every 3 days at 03:00 UTC — keeps the baked depot fresh
+
+concurrency:
+  group: ghcr-s-box-egg-wisp-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/yorkhost-fr/s-box-egg-wisp
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=sha,format=short
+            type=raw,value={{date 'YYYYMMDD-HHmmss'}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Yolk/Dockerfile
+          platforms: linux/amd64
+          push: true
+          pull: true
+          no-cache: ${{ github.event_name != 'push' }}
+          build-args: |
+            BAKE_SBOX_CACHE_BUSTER=${{ github.run_id }}-${{ github.run_attempt }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
