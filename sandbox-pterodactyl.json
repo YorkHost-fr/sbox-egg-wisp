@@ -8,7 +8,7 @@
     "author": "dev@yorkhost.fr",
     "description": "s&box dedicated server (YorkHost) — Wine + baked Windows .NET + SteamCMD prefetch.",
     "features": [],
-    "docker_images": {
+    "docker_images": { 
         "ghcr.io/yorkhost-fr/s-box-egg-wisp:latest": "ghcr.io/yorkhost-fr/s-box-egg-wisp:latest"
     },
     "file_denylist": [],
