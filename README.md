@@ -7,13 +7,26 @@ Forked / adapted from [HyberHost/gameforge-sbox-egg](https://github.com/HyberHos
 (MIT). Rebased on our own GHCR image so we do not depend on a third party for
 production image rebuilds.
 
+## Design — minimal image, SteamCMD-driven install
+
+The Docker image ships **only** what is expensive to provision at runtime:
+Wine + a pre-baked Wine prefix with Windows .NET 10 installed. **The s&box
+server files themselves are not in the image.** They are fetched via SteamCMD
+by the panel install script at server creation, and kept current at runtime.
+
+Why: baking ~3-4 GB of game depot into the image makes it heavy, stale, and
+slow to build. The install script does the same SteamCMD call at provisioning
+time — one less moving part, one less place to keep fresh.
+
+Expected image size: **~1.5-2 GB**. Build time: **~15 min**.
+
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| [Yolk/Dockerfile](Yolk/Dockerfile) | Two-stage image build (Wine + baked Windows .NET + baked s&box depot). |
-| [Yolk/entrypoint.sh](Yolk/entrypoint.sh) | Runtime: seed prefix/files, run SteamCMD update, launch `sbox-server.exe`. |
-| [Yolk/install.sh](Yolk/install.sh) | Panel-side install script: bootstraps SteamCMD into `/mnt/server` and prefetches the s&box depot. |
+| [Yolk/Dockerfile](Yolk/Dockerfile) | Two-stage image build: Wine + baked Windows .NET 10 Wine prefix. No game files. |
+| [Yolk/entrypoint.sh](Yolk/entrypoint.sh) | Runtime: seed Wine prefix, run SteamCMD update, launch `sbox-server.exe`. |
+| [Yolk/install.sh](Yolk/install.sh) | Panel install script: bootstraps SteamCMD into `/mnt/server/steamcmd` and fetches the s&box depot into `/mnt/server/sbox`. |
 | [sandbox-pterodactyl.json](sandbox-pterodactyl.json) | Pterodactyl egg export. |
 | [sandbox-pelican.json](sandbox-pelican.json) | Pelican egg export. |
 | [.github/workflows/build-and-publish.yml](.github/workflows/build-and-publish.yml) | Builds and pushes to `ghcr.io/yorkhost-fr/s-box-egg-wisp`. |
@@ -23,7 +36,8 @@ production image rebuilds.
 Published at: `ghcr.io/yorkhost-fr/s-box-egg-wisp:latest`
 
 Tagged on every push to `main` plus a timestamped tag and short SHA. Also
-rebuilt every 3 days via cron so the baked s&box depot stays fresh.
+rebuilt on the 1st of each month via cron to refresh Wine + .NET base
+packages.
 
 Local build:
 
@@ -34,35 +48,33 @@ docker build --platform linux/amd64 \
   .
 ```
 
+## Install and runtime flow
+
+1. **Panel server creation** — Pterodactyl/Pelican runs [Yolk/install.sh](Yolk/install.sh)
+   in a `debian:bookworm-slim` container: installs SteamCMD dependencies,
+   downloads SteamCMD into `/mnt/server/steamcmd`, runs
+   `app_update 1892930 validate` with `+@sSteamCmdForcePlatformType windows`.
+   Server files end up in `/mnt/server/sbox/`.
+2. **First boot** — the image entrypoint seeds the Wine prefix from
+   `/opt/sbox-wine-prefix` into `/home/container/.wine`. Then runs SteamCMD
+   again (`SBOX_AUTO_UPDATE=1` default) on the already-populated `sbox/` dir —
+   this is cheap since everything is already up to date.
+3. **Subsequent boots** — entrypoint runs SteamCMD to pull any s&box update
+   from Facepunch. On Steam failure, it falls back to the files on disk and
+   launches anyway.
+
 ## Changes vs upstream
 
 - Image moved to our own GHCR namespace (was `ghcr.io/hyberhost/gameforge-sbox-egg`).
-- Install script is no longer a no-op. It now bootstraps SteamCMD inside the
-  server volume and prefetches the s&box Windows depot, so the first container
-  boot does not block on a Steam round-trip. Runtime `SBOX_AUTO_UPDATE` still
-  keeps the server current on subsequent boots.
+- **s&box depot no longer baked into the image**. Install script owns that
+  responsibility. Runtime updater keeps things current.
+- Install script is no longer a no-op. It bootstraps SteamCMD and fetches the
+  depot at provisioning.
 - Install container: `debian:bookworm-slim` (was `alpine:3`), needed for
   SteamCMD (32-bit glibc).
 - Author / labels / source URLs point at YorkHost.
 
-## Install flow
-
-Two places fetch s&box content, intentionally redundant:
-
-1. **Image build** — `Yolk/Dockerfile` runs SteamCMD at build time and bakes
-   the depot into `/opt/sbox-server-template`. `entrypoint.sh` seeds from
-   there on first boot if the panel volume is empty.
-2. **Panel install script** — `Yolk/install.sh` runs in the install container
-   and populates `/mnt/server/sbox` directly. This means the very first boot
-   on a brand-new server already has files on disk, even before any runtime
-   SteamCMD call.
-3. **Runtime** — `entrypoint.sh` runs SteamCMD on boot (if
-   `SBOX_AUTO_UPDATE=1`) to keep the server patched. On failure it falls back
-   to whatever is already on disk.
-
 ## Panel variables
-
-Identical to upstream; summary:
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -84,8 +96,9 @@ Identical to upstream; summary:
 
 1. Import `sandbox-pterodactyl.json` (or `sandbox-pelican.json`) into your panel.
 2. Confirm the docker image is `ghcr.io/yorkhost-fr/s-box-egg-wisp:latest`.
-3. Create a server. The install script prefetches the depot.
-4. Start. Entrypoint seeds the Wine prefix if needed, runs SteamCMD, launches.
+3. Create a server. The install script downloads s&box via SteamCMD.
+4. Start. Entrypoint seeds the Wine prefix, runs SteamCMD to confirm current
+   version, launches.
 
 ## Notes
 

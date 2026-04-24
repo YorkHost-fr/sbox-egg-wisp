@@ -11,7 +11,7 @@ on:
       - .github/workflows/build-and-publish.yml
   workflow_dispatch:
   schedule:
-    - cron: "0 3 */3 * *" # every 3 days at 03:00 UTC — keeps the baked depot fresh
+    - cron: "0 3 1 * *" # 1st of each month at 03:00 UTC — refresh Wine + .NET base
 
 concurrency:
   group: ghcr-s-box-egg-wisp-${{ github.ref }}
@@ -63,9 +63,7 @@ jobs:
           platforms: linux/amd64
           push: true
           pull: true
-          no-cache: ${{ github.event_name != 'push' }}
-          build-args: |
-            BAKE_SBOX_CACHE_BUSTER=${{ github.run_id }}-${{ github.run_attempt }}
+          no-cache: ${{ github.event_name == 'schedule' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
