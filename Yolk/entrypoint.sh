@@ -442,13 +442,23 @@ run_sbox() {
         args+=( +maxplayers "${MAX_PLAYERS}" )
     fi
 
-    # Add direct connect option if enabled
-    if [ "${ENABLE_DIRECT_CONNECT}" = "1" ]; then
-        args+=( +net_hide_address 0 +port ${SERVER_PORT:-27015} )
+    # Always pass +port using the panel's allocated SERVER_PORT, regardless of
+    # connect mode. Even in Steam Relay, this gives a predictable bind port.
+    if [ -n "${SERVER_PORT:-}" ]; then
+        args+=( +port "${SERVER_PORT}" )
     fi
 
-    if [ -n "${QUERY_PORT:-}" ]; then
-        args+=( +net_query_port "${QUERY_PORT}" )
+    # Query port (+net_query_port): explicit QUERY_PORT, else fall back to
+    # SERVER_PORT so A2S queries land somewhere predictable in Direct Connect.
+    local query_port_resolved="${QUERY_PORT:-${SERVER_PORT:-}}"
+    if [ -n "${query_port_resolved}" ]; then
+        args+=( +net_query_port "${query_port_resolved}" )
+    fi
+
+    # Direct Connect: disable the Steam Datagram Relay so players can join via
+    # raw IP:port and the server responds to A2S_INFO on the query port.
+    if [ "${ENABLE_DIRECT_CONNECT}" = "1" ]; then
+        args+=( +sbox_steam_relay 0 +net_hide_address 0 )
     fi
 
     if [ -n "${SBOX_EXTRA_ARGS}" ]; then

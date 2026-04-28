@@ -30,7 +30,7 @@ FROM debian:trixie-slim AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BAKE_WINETRICKS_VERBS="win10 vcrun2022"
-ARG BAKE_WIN_DOTNET_VERSION=10.0.0
+ARG BAKE_WIN_DOTNET_VERSION=10.0.7
 
 RUN dpkg --add-architecture i386 \
     && sed -i 's/^Components: main$/& contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources \
