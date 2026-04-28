@@ -17,7 +17,7 @@
     "startup": "start-sbox",
     "config": {
         "files": "{}",
-        "startup": "{\r\n    \"done\": \"Loading game|Server started\"\r\n}",
+        "startup": "{\r\n    \"done\": \"Bootstrap Networking|Server is ready|Server started\"\r\n}",
         "logs": "{\r\n    \"custom\": false,\r\n    \"location\": \"logs/sbox-*.log\"\r\n}",
         "stop": "^C"
     },
@@ -36,7 +36,7 @@
             "default_value": "facepunch.walker",
             "user_viewable": true,
             "user_editable": true,
-            "rules": "nullable|string|max:64",
+            "rules": "required|string|max:128",
             "field_type": "text"
         },
         {
@@ -104,17 +104,18 @@
             "description": "Server query port for Direct Connect. (Experimental)",
             "env_variable": "QUERY_PORT",
             "default_value": "",
-            "user_viewable": false,
-            "user_editable": false,
-            "rules": "nullable|numeric|between:1024,65535"
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|numeric|between:1024,65535",
+            "field_type": "text"
         },
         {
             "name": "Direct Connect (No Steam Relay)",
             "description": "Allow direct connection via IP+Port without Steam relay (0=Steam relay enabled, 1=Direct IP connection enabled). When enabled, players can connect directly to the server IP and port instead of using Steam relay.",
             "env_variable": "ENABLE_DIRECT_CONNECT",
             "default_value": "0",
-            "user_viewable": false,
-            "user_editable": false,
+            "user_viewable": true,
+            "user_editable": true,
             "rules": "required|in:0,1",
             "field_type": "text"
         },
@@ -123,8 +124,8 @@
             "description": "Optional Steam game server token passed as +net_game_server_token.",
             "env_variable": "TOKEN",
             "default_value": "",
-            "user_viewable": false,
-            "user_editable": false,
+            "user_viewable": true,
+            "user_editable": true,
             "rules": "nullable|string|max:255",
             "field_type": "text"
         },
@@ -133,8 +134,8 @@
             "description": "Optional Steam beta branch name used for updates (for example: staging).",
             "env_variable": "SBOX_BRANCH",
             "default_value": "",
-            "user_viewable": false,
-            "user_editable": false,
+            "user_viewable": true,
+            "user_editable": true,
             "rules": "nullable|string|max:64",
             "field_type": "text"
         },
@@ -152,7 +153,7 @@
             "name": "Windows .NET Version",
             "description": "Informational only: Windows .NET runtime version baked into the container image.",
             "env_variable": "WIN_DOTNET_VERSION",
-            "default_value": "10.0.0",
+            "default_value": "10.0.7",
             "user_viewable": false,
             "user_editable": false,
             "rules": "required|string|max:32",

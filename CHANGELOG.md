@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 2026-04-28 — port handling + .NET bump
+## 2026-04-28 — port handling + .NET bump + egg variable visibility
 
 ### Yolk/entrypoint.sh
 
@@ -26,12 +26,27 @@ Fixed `+port` and `+net_query_port` handling in `run_sbox()`:
   `FileNotFoundException: ...Microsoft.NETCore.App\10.0.7\System.Runtime.dll`
   on recent S&Box builds because the runtime was hardcoded to 10.0.0.
 
+### sandbox-pterodactyl.json / sandbox-pelican.json
+
+- **Made `QUERY_PORT`, `ENABLE_DIRECT_CONNECT`, `TOKEN`, `SBOX_BRANCH` visible
+  and editable by users.** They were `user_viewable: false`, so operators
+  could not enable Direct Connect or set a Steam GSLT from the panel UI.
+- **Bumped `WIN_DOTNET_VERSION` default to `10.0.7`** to match the Dockerfile.
+- **Made `GAME` required** (was nullable, but the server cannot start without).
+- **Widened the boot-done detection regex** to match `Bootstrap Networking`,
+  `Server is ready`, and `Server started`. The previous `Loading game` was
+  matching too early in the boot sequence and Pterodactyl was marking the
+  server as running before it actually accepted connections.
+
 ### Migration
 
 1. Replace the files in your local clone of the repo with these versions
-2. `git add -A && git commit -m "fix: port handling and .NET 10.0.7"`
+2. `git add -A && git commit -m "fix: port handling, .NET 10.0.7, egg variable visibility"`
 3. `git push origin main`
 4. GitHub Actions rebuilds and publishes `ghcr.io/yorkhost-fr/s-box-egg-wisp:latest`
 5. On Wings nodes: `docker pull ghcr.io/yorkhost-fr/s-box-egg-wisp:latest`
-6. Restart S&Box servers (no reinstall needed; the entrypoint reseeds the
+6. Re-import `sandbox-pterodactyl.json` in the panel (Admin > Nests > Update Egg)
+   so the new variable visibility takes effect on existing servers.
+7. Restart S&Box servers (no reinstall needed; the entrypoint reseeds the
    prefix from the new baked image automatically on first boot).
+
