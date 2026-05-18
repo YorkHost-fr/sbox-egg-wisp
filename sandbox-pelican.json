@@ -4,7 +4,7 @@
         "version": "PTDL_v2",
         "update_url": null
     },
-    "exported_at": "2026-04-09T00:00:00+00:00",
+    "exported_at": "2026-05-18T00:00:00+00:00",
     "name": "s&box Game Server",
     "author": "dev@yorkhost.fr",
     "uuid": "dac2aaa2-4ef2-4220-a0cf-a968e61919f7",
@@ -31,7 +31,7 @@
     "variables": [
         {
             "name": "Game",
-            "description": "Primary game package passed to +game (for example: facepunch.walker).",
+            "description": "Primary game package passed to +game (for example: facepunch.walker, mydriss.darkrp).",
             "env_variable": "GAME",
             "default_value": "facepunch.walker",
             "user_viewable": true,
@@ -47,6 +47,16 @@
             "user_viewable": true,
             "user_editable": true,
             "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Description",
+            "description": "Optional public server description, passed as +server_description. Some gamemodes use it as the listing tagline.",
+            "env_variable": "SERVER_DESCRIPTION",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:255",
             "field_type": "text"
         },
         {
@@ -90,6 +100,16 @@
             "field_type": "text"
         },
         {
+            "name": "Tickrate",
+            "description": "Optional server simulation frequency, passed as +tickrate. Higher values improve physics but increase CPU usage. Leave blank to use the gamemode default.",
+            "env_variable": "TICKRATE",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|numeric|between:10,128",
+            "field_type": "text"
+        },
+        {
             "name": "Auto Update",
             "description": "Run a SteamCMD update check on every container boot to keep the server up to date (1=enabled, 0=disabled).",
             "env_variable": "SBOX_AUTO_UPDATE",
@@ -127,6 +147,36 @@
             "user_viewable": true,
             "user_editable": true,
             "rules": "nullable|string|max:255",
+            "field_type": "text"
+        },
+        {
+            "name": "Owner SteamID",
+            "description": "Optional Steam64 ID granted superadmin rights on supported gamemodes (e.g. DarkRP.xyz). Passed as +owner_steamid.",
+            "env_variable": "OWNER_STEAMID",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Cloud Server ID",
+            "description": "Optional cloud-sync server identifier (for gamemodes such as DarkRP.xyz — get it from https://darkrp.xyz/dashboard). Passed as +server_id.",
+            "env_variable": "SERVER_ID",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Cloud Server Key",
+            "description": "Optional cloud-sync server secret (for gamemodes such as DarkRP.xyz — get it from https://darkrp.xyz/dashboard). Passed as +server_key. Redacted from container logs.",
+            "env_variable": "SERVER_KEY",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
             "field_type": "text"
         },
         {
