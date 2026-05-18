@@ -19,6 +19,8 @@ SBOX_STEAMCMD_TIMEOUT="${SBOX_STEAMCMD_TIMEOUT:-600}"
 GAME="${GAME:-}"
 MAP="${MAP:-}"
 SERVER_NAME="${SERVER_NAME:-}"
+SERVER_DESCRIPTION="${SERVER_DESCRIPTION:-}"
+TICKRATE="${TICKRATE:-}"
 HOSTNAME_FALLBACK="${HOSTNAME:-}"
 QUERY_PORT="${QUERY_PORT:-}"
 MAX_PLAYERS="${MAX_PLAYERS:-}"
@@ -27,6 +29,12 @@ TOKEN="${TOKEN:-}"
 SBOX_PROJECT="${SBOX_PROJECT:-}"
 SBOX_PROJECTS_DIR="${SBOX_PROJECTS_DIR:-${CONTAINER_HOME}/projects}"
 SBOX_EXTRA_ARGS="${SBOX_EXTRA_ARGS:-}"
+
+# Optional gamemode cloud-sync variables (DarkRP.xyz and similar integrations).
+# Empty by default; only emitted on the command line when set.
+SERVER_KEY="${SERVER_KEY:-}"
+OWNER_STEAMID="${OWNER_STEAMID:-}"
+SERVER_ID="${SERVER_ID:-}"
 
 # Computed variables
 SERVER_PID=""
@@ -433,8 +441,31 @@ run_sbox() {
         args+=( +hostname "${resolved_server_name}" )
     fi
 
+    if [ -n "${SERVER_DESCRIPTION}" ]; then
+        args+=( +server_description "${SERVER_DESCRIPTION}" )
+    fi
+
     if [ -n "${TOKEN}" ]; then
         args+=( +net_game_server_token "${TOKEN}" )
+    fi
+
+    # Optional gamemode cloud-sync flags (e.g. DarkRP.xyz). Only emitted when
+    # the corresponding panel variable is non-empty so they stay opt-in for
+    # gamemodes that do not consume them.
+    if [ -n "${SERVER_KEY}" ]; then
+        args+=( +server_key "${SERVER_KEY}" )
+    fi
+
+    if [ -n "${OWNER_STEAMID}" ]; then
+        args+=( +owner_steamid "${OWNER_STEAMID}" )
+    fi
+
+    if [ -n "${SERVER_ID}" ]; then
+        args+=( +server_id "${SERVER_ID}" )
+    fi
+
+    if [ -n "${TICKRATE}" ]; then
+        args+=( +tickrate "${TICKRATE}" )
     fi
 
     # Adds Max Players argument if the variable is set and greater than 0 or "" 
@@ -480,19 +511,27 @@ run_sbox() {
         DOTNET_ZapDisable=1
     )
 
+    # Build a redacted version of the command line for logs. Any flag listed
+    # in `redacted_flags` causes the immediately-following value to be replaced
+    # with [REDACTED]. The previous implementation referenced an unset
+    # `skip_next` variable and ended up leaking the actual token value.
+    local skip_next=0
+    local arg=""
     for arg in "${args[@]}"; do
-        if [[ "${arg}" == "+net_game_server_token" ]]; then
-            redacted_args+=( "+net_game_server_token" "[REDACTED]" )
-            # Skip the next iteration to avoid logging the actual token
+        if [ "${skip_next}" = "1" ]; then
+            redacted_args+=( "[REDACTED]" )
+            skip_next=0
             continue
         fi
-
-        # Only add to redacted if we didn't just skip a token flag
-        if [ -z "${skip_next:-}" ]; then
-            redacted_args+=( "${arg}" )
-        else
-            unset skip_next
-        fi
+        case "${arg}" in
+            +net_game_server_token|+server_key)
+                redacted_args+=( "${arg}" )
+                skip_next=1
+                ;;
+            *)
+                redacted_args+=( "${arg}" )
+                ;;
+        esac
     done
 
     if [ "${ENABLE_DIRECT_CONNECT}" = "1" ]; then
