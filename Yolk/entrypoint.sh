@@ -337,20 +337,23 @@ clear_steam_appmanifest() {
     fi
 }
 
+steamcmd_update_succeeded() {
+    # SteamCMD's exit code is unreliable: a bare probe, a first-run self-update
+    # re-exec, or harmless bootstrap warnings ("ILocalize::AddFile() failed...")
+    # all make it return non-zero even when the app is fully installed. The only
+    # trustworthy success signal is its own log line. Trust that over $?.
+    grep -q "Success! App '${SBOX_APP_ID}' fully installed" "${UPDATE_LOG}" 2>/dev/null \
+        || grep -q "App '${SBOX_APP_ID}' fully installed" "${UPDATE_LOG}" 2>/dev/null \
+        || grep -q "already up to date" "${UPDATE_LOG}" 2>/dev/null
+}
+
 update_sbox() {
     local -a steam_args
     local -a steam_args_retry
-    local -a probe_args
     local force_platform="windows"
     local steamcmd_status=0
 
     : > "${UPDATE_LOG}"
-
-    probe_args=(
-        +@ShutdownOnFailedCommand 1
-        +@NoPromptForPassword 1
-        +quit
-    )
 
     steam_args=(
         +@ShutdownOnFailedCommand 1
@@ -369,89 +372,63 @@ update_sbox() {
     steam_args+=( validate +quit )
     steam_args_retry+=( +quit )
 
-    # Warm-up run: on its first launch in a fresh container SteamCMD self-updates
-    # and re-execs, and that first process frequently exits non-zero even though
-    # SteamCMD is perfectly fine ("Checking for available update... Download
-    # Complete"). Without this, the probe below sees that non-zero, declares the
-    # probe failed, SKIPS the app_update, and the server boots on stale files
-    # forever — which causes content/engine version mismatches ("Old shader needs
-    # to be recompiled", missing *.vmdl_c/*.group_c) once asset.party content
-    # moves ahead of the installed build. We absorb the self-update here and
-    # ignore its exit code on purpose.
-    log_info "warming up SteamCMD (absorbing first-run self-update)..."
-    set +e
-    run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" "${probe_args[@]}" >/dev/null 2>&1
-    set -e
+    # SteamCMD's first invocation in a fresh container is consumed by its own
+    # self-update: it prints "Checking for available update... Download Complete"
+    # and EXITS without ever running login/app_update. The next invocation finds
+    # itself up to date and actually performs the update. A single warm-up isn't
+    # reliable, so we loop the real app_update and stop as soon as SteamCMD's own
+    # log says the app is fully installed (its exit code is not trustworthy).
+    local attempt=0
+    local max_attempts="${SBOX_STEAMCMD_MAX_ATTEMPTS:-4}"
+    local manifest_cleared=0
 
-    set +e
-    run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" "${probe_args[@]}" 2>&1 | tee -a "${UPDATE_LOG}"
-    steamcmd_status=${PIPESTATUS[0]}
-    set -e
-    if [ "${steamcmd_status}" -ne 0 ]; then
-        log_warn "SteamCMD runtime probe failed; cannot run auto-update"
-        if [ "${steamcmd_status}" -eq 124 ]; then
-            log_warn "SteamCMD probe timed out after ${SBOX_STEAMCMD_TIMEOUT}s (common hang point: Steam API/user info)"
-        fi
-        log_warn "see ${UPDATE_LOG} for details"
-        if [ ! -f "${SBOX_SERVER_EXE}" ]; then
-            log_error "${SBOX_SERVER_EXE} was not found"
-            log_error "run the egg installation script, or enable auto-update after SteamCMD has been installed"
-            return 1
-        fi
-        log_warn "continuing startup with existing server files because ${SBOX_SERVER_EXE} already exists"
-        return 0
-    fi
+    log_info "running SteamCMD app_update for app ${SBOX_APP_ID} (forced platform '${force_platform}', up to ${max_attempts} attempts)"
 
-    log_info "running SteamCMD app_update for app ${SBOX_APP_ID} with forced platform '${force_platform}'"
-    set +e
-    run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" "${steam_args[@]}" 2>&1 | tee -a "${UPDATE_LOG}"
-    steamcmd_status=${PIPESTATUS[0]}
-    set -e
-    if [ "${steamcmd_status}" -ne 0 ]; then
-        if grep -q "Missing configuration" "${UPDATE_LOG}"; then
-            log_warn "SteamCMD reported missing configuration; retrying app_update once without validate"
-            set +e
-            run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" "${steam_args_retry[@]}" 2>&1 | tee -a "${UPDATE_LOG}"
-            steamcmd_status=${PIPESTATUS[0]}
-            set -e
-        fi
+    while [ "${attempt}" -lt "${max_attempts}" ]; do
+        attempt=$((attempt + 1))
+        log_info "SteamCMD app_update attempt ${attempt}/${max_attempts}..."
 
-        if [ "${steamcmd_status}" -eq 0 ]; then
-            log_info "SteamCMD retry completed successfully"
-            return 0
-        fi
-
-        # A failed/interrupted update leaves a poisoned appmanifest that makes the
-        # next run abort instantly (state 0x402) with no download. Clear it and
-        # retry once with a full validate so SteamCMD rebuilds clean state.
-        log_warn "SteamCMD update still failing (status ${steamcmd_status}); clearing app manifest and retrying once"
-        dump_steamcmd_stderr
-        clear_steam_appmanifest
         set +e
         run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" "${steam_args[@]}" 2>&1 | tee -a "${UPDATE_LOG}"
         steamcmd_status=${PIPESTATUS[0]}
         set -e
-        if [ "${steamcmd_status}" -eq 0 ]; then
-            log_info "SteamCMD retry succeeded after manifest clear"
+
+        if [ "${steamcmd_status}" -eq 0 ] || steamcmd_update_succeeded; then
+            log_info "SteamCMD app_update completed (app ${SBOX_APP_ID} fully installed)"
             return 0
         fi
 
-        log_warn "SteamCMD update failed with forced platform '${force_platform}'; refusing Linux fallback to preserve Wine-compatible server files"
+        # Escalation 1: SteamCMD complained about validate; drop it next time.
+        if grep -q "Missing configuration" "${UPDATE_LOG}"; then
+            log_warn "SteamCMD reported missing configuration; dropping 'validate' for remaining attempts"
+            steam_args=("${steam_args_retry[@]}")
+        fi
+
+        # Escalation 2 (once): a poisoned appmanifest makes SteamCMD abort instantly
+        # with "state is 0x402"; clear it so the next attempt rebuilds clean state.
+        if [ "${manifest_cleared}" -eq 0 ] && grep -q "0x402\|state is 0x6\|Error! App" "${UPDATE_LOG}"; then
+            log_warn "detected poisoned Steam app manifest; clearing it before next attempt"
+            clear_steam_appmanifest
+            manifest_cleared=1
+        fi
+
         if [ "${steamcmd_status}" -eq 124 ]; then
-            log_warn "SteamCMD update timed out after ${SBOX_STEAMCMD_TIMEOUT}s"
+            log_warn "SteamCMD attempt ${attempt} timed out after ${SBOX_STEAMCMD_TIMEOUT}s"
+        else
+            log_warn "SteamCMD attempt ${attempt} did not report success yet (likely self-update consumed the run); retrying"
         fi
-        log_warn "see ${UPDATE_LOG} for details"
-        dump_steamcmd_stderr
-        if [ -f "${SBOX_SERVER_EXE}" ]; then
-            log_warn "continuing startup with existing server files because ${SBOX_SERVER_EXE} already exists"
-            return 0
-        fi
-        return 1
-    fi
+    done
 
-    if [ ! -f "${SBOX_SERVER_EXE}" ] && [ -d "${SBOX_INSTALL_DIR}/linux64" ]; then
-        log_warn "update finished but Windows server executable is still missing while linux64 content exists in ${SBOX_INSTALL_DIR}"
+    log_warn "SteamCMD did not report a completed update after ${max_attempts} attempts"
+    log_warn "see ${UPDATE_LOG} for details"
+    dump_steamcmd_stderr
+    if [ -f "${SBOX_SERVER_EXE}" ]; then
+        log_warn "continuing startup with existing server files because ${SBOX_SERVER_EXE} already exists"
+        return 0
     fi
+    log_error "${SBOX_SERVER_EXE} was not found and the update did not complete"
+    log_error "run the egg installation script, or check ${UPDATE_LOG}"
+    return 1
 }
 
 # ============================================================================
