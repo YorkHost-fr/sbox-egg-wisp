@@ -54,7 +54,26 @@ fi
 
 STEAM_ARGS+=( validate +quit )
 
-if ! ./steamcmd/steamcmd.sh "${STEAM_ARGS[@]}"; then
+prefetch_ok=0
+if ./steamcmd/steamcmd.sh "${STEAM_ARGS[@]}"; then
+    prefetch_ok=1
+else
+    # A failed/interrupted app_update poisons appmanifest_<appid>.acf, after which
+    # SteamCMD aborts instantly ("state is 0x402") on every later run. Clear it
+    # and retry once so the prefetch can actually seed sbox-server.exe.
+    MANIFEST="/mnt/server/sbox/steamapps/appmanifest_${APP_ID}.acf"
+    if [ -f "${MANIFEST}" ]; then
+        echo "[install] clearing stale Steam app manifest ${MANIFEST} and retrying prefetch once"
+        rm -f "${MANIFEST}"
+    else
+        echo "[install] prefetch failed; retrying once"
+    fi
+    if ./steamcmd/steamcmd.sh "${STEAM_ARGS[@]}"; then
+        prefetch_ok=1
+    fi
+fi
+
+if [ "${prefetch_ok}" -ne 1 ]; then
     echo "[install] SteamCMD prefetch failed; runtime updater will retry on first boot"
 fi
 

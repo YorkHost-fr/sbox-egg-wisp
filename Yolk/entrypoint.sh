@@ -14,6 +14,8 @@ SBOX_APP_ID="${SBOX_APP_ID:-1892930}"
 SBOX_AUTO_UPDATE="${SBOX_AUTO_UPDATE:-1}"
 SBOX_BRANCH="${SBOX_BRANCH:-}"
 SBOX_STEAMCMD_TIMEOUT="${SBOX_STEAMCMD_TIMEOUT:-600}"
+STEAMCMD_DIR="${STEAMCMD_DIR:-/opt/steamcmd}"
+STEAMCMD_EXTRA_ARGS="${STEAMCMD_EXTRA_ARGS:-}"
 
 # Optional server configuration variables
 GAME="${GAME:-}"
@@ -226,9 +228,17 @@ ensure_project_libraries_dir() {
 resolve_steamcmd_binary() {
     local candidate=""
 
+    # Prefer the Valve tarball steamcmd.sh baked into the image at
+    # ${STEAMCMD_DIR}. It always runs the linux32 client and selects the windows
+    # depot via +@sSteamCmdForcePlatformType (content only), so the alpine
+    # "windows binary lookup" bug cannot occur. The in-volume copy (dropped by
+    # install.sh) and the distro wrappers are kept only as last-resort fallbacks.
     for candidate in \
-        "/usr/bin/steamcmd" \
-        "/usr/games/steamcmd"
+        "${STEAMCMD_DIR}/steamcmd.sh" \
+        "/opt/steamcmd/steamcmd.sh" \
+        "${CONTAINER_HOME}/steamcmd/steamcmd.sh" \
+        "/usr/games/steamcmd" \
+        "/usr/bin/steamcmd"
     do
         if [ -f "${candidate}" ]; then
             printf '%s' "${candidate}"
@@ -242,7 +252,6 @@ resolve_steamcmd_binary() {
 run_steamcmd() {
     local -a args=("$@")
     local steamcmd_bin=""
-    local steamcmd_library_path="/lib:/usr/lib/games/steam"
 
     mkdir -p "${CONTAINER_HOME}/.steam" "${CONTAINER_HOME}/.local/share" "${CONTAINER_HOME}/Steam"
     ln -sfn "${CONTAINER_HOME}/Steam" "${CONTAINER_HOME}/.steam/root"
@@ -251,11 +260,14 @@ run_steamcmd() {
     steamcmd_bin="$(resolve_steamcmd_binary || true)"
 
     if [ -z "${steamcmd_bin}" ]; then
-        log_warn "SteamCMD binary not found in expected locations"
+        log_warn "SteamCMD binary not found (expected ${STEAMCMD_DIR}/steamcmd.sh)"
         return 1
     fi
 
-    HOME="${CONTAINER_HOME}" LD_LIBRARY_PATH="${steamcmd_library_path}" "${steamcmd_bin}" "${args[@]}"
+    # Run via bash so a steamcmd.sh launcher works regardless of its +x bit, and
+    # let it pick the linux32 client itself. HOME is set so SteamCMD writes its
+    # state inside the server volume.
+    HOME="${CONTAINER_HOME}" bash "${steamcmd_bin}" "${args[@]}"
 }
 
 run_steamcmd_with_timeout() {
@@ -263,7 +275,6 @@ run_steamcmd_with_timeout() {
     shift
     local -a args=("$@")
     local steamcmd_bin=""
-    local steamcmd_library_path="/lib:/usr/lib/games/steam"
 
     mkdir -p "${CONTAINER_HOME}/.steam" "${CONTAINER_HOME}/.local/share" "${CONTAINER_HOME}/Steam"
     ln -sfn "${CONTAINER_HOME}/Steam" "${CONTAINER_HOME}/.steam/root"
@@ -271,7 +282,7 @@ run_steamcmd_with_timeout() {
 
     steamcmd_bin="$(resolve_steamcmd_binary || true)"
     if [ -z "${steamcmd_bin}" ]; then
-        log_warn "SteamCMD binary not found in expected locations"
+        log_warn "SteamCMD binary not found (expected ${STEAMCMD_DIR}/steamcmd.sh)"
         return 1
     fi
 
@@ -284,17 +295,47 @@ run_steamcmd_with_timeout() {
         timeout_seconds=0
     fi
 
+    # Run via bash; the Valve steamcmd.sh always runs the linux32 client. HOME is
+    # set so SteamCMD keeps its state inside the server volume.
     if [ "${timeout_seconds}" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
-        HOME="${CONTAINER_HOME}" LD_LIBRARY_PATH="${steamcmd_library_path}" timeout "${timeout_seconds}" "${steamcmd_bin}" "${args[@]}"
+        HOME="${CONTAINER_HOME}" timeout "${timeout_seconds}" bash "${steamcmd_bin}" "${args[@]}"
         return $?
     fi
 
-    HOME="${CONTAINER_HOME}" LD_LIBRARY_PATH="${steamcmd_library_path}" "${steamcmd_bin}" "${args[@]}"
+    HOME="${CONTAINER_HOME}" bash "${steamcmd_bin}" "${args[@]}"
 }
 
 # ============================================================================
 # UPDATE FUNCTIONS
 # ============================================================================
+
+dump_steamcmd_stderr() {
+    # SteamCMD redirects its real errors to Steam/logs/stderr.txt, which never
+    # reaches the panel console. Surface the tail so failures (e.g. a missing
+    # 32-bit library: "error while loading shared libraries") become visible.
+    local stderr_log="${CONTAINER_HOME}/Steam/logs/stderr.txt"
+    if [ -f "${stderr_log}" ]; then
+        log_warn "---- SteamCMD stderr.txt (tail) ----"
+        tail -n 30 "${stderr_log}" >&2 || true
+        log_warn "---- end SteamCMD stderr.txt ----"
+    else
+        log_warn "no SteamCMD stderr.txt at ${stderr_log}"
+    fi
+}
+
+clear_steam_appmanifest() {
+    # When an app_update is interrupted or fails, SteamCMD persists
+    # StateFlags/UpdateResult into appmanifest_<appid>.acf, then reads that stale
+    # failure state on the next run and aborts INSTANTLY without downloading
+    # ("Error! App '<appid>' state is 0x402 after update job"). Removing the
+    # manifest forces a clean update; the game files in steamapps/common are
+    # untouched and simply re-validated.
+    local manifest="${SBOX_INSTALL_DIR}/steamapps/appmanifest_${SBOX_APP_ID}.acf"
+    if [ -f "${manifest}" ]; then
+        log_info "removing stale Steam app manifest ${manifest}"
+        rm -f "${manifest}"
+    fi
+}
 
 update_sbox() {
     local -a steam_args
@@ -366,11 +407,27 @@ update_sbox() {
             return 0
         fi
 
+        # A failed/interrupted update leaves a poisoned appmanifest that makes the
+        # next run abort instantly (state 0x402) with no download. Clear it and
+        # retry once with a full validate so SteamCMD rebuilds clean state.
+        log_warn "SteamCMD update still failing (status ${steamcmd_status}); clearing app manifest and retrying once"
+        dump_steamcmd_stderr
+        clear_steam_appmanifest
+        set +e
+        run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" "${steam_args[@]}" 2>&1 | tee -a "${UPDATE_LOG}"
+        steamcmd_status=${PIPESTATUS[0]}
+        set -e
+        if [ "${steamcmd_status}" -eq 0 ]; then
+            log_info "SteamCMD retry succeeded after manifest clear"
+            return 0
+        fi
+
         log_warn "SteamCMD update failed with forced platform '${force_platform}'; refusing Linux fallback to preserve Wine-compatible server files"
         if [ "${steamcmd_status}" -eq 124 ]; then
             log_warn "SteamCMD update timed out after ${SBOX_STEAMCMD_TIMEOUT}s"
         fi
         log_warn "see ${UPDATE_LOG} for details"
+        dump_steamcmd_stderr
         if [ -f "${SBOX_SERVER_EXE}" ]; then
             log_warn "continuing startup with existing server files because ${SBOX_SERVER_EXE} already exists"
             return 0

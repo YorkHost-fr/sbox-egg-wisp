@@ -1,5 +1,5 @@
 {
-    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY WISP - https:\/\/wisp.gg\/",
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY WISP - https://wisp.gg/",
     "meta": {
         "version": "PTDL_v1"
     },
@@ -7,23 +7,23 @@
     "name": "s&box Game Server",
     "tag": "",
     "author": "dev@yorkhost.fr",
-    "description": "s&box dedicated server (YorkHost) \u2014 Wine + baked Windows .NET + SteamCMD prefetch.",
+    "description": "s&box dedicated server (YorkHost) — Wine + baked Windows .NET + SteamCMD prefetch.",
     "docker_images": {
-        "ghcr.io\/yorkhost-fr\/s-box-egg-wisp:latest": "ghcr.io\/yorkhost-fr\/s-box-egg-wisp:latest"
+        "ghcr.io/yorkhost-fr/s-box-egg-wisp:latest": "ghcr.io/yorkhost-fr/s-box-egg-wisp:latest"
     },
     "startup": "start-sbox",
     "disable_special_characters_in_database_passwords": false,
     "config": {
         "files": "{}",
         "startup": "{\r\n    \"done\": \"Bootstrap Networking|Server is ready|Server started\"\r\n}",
-        "logs": "{\r\n    \"custom\": true,\r\n    \"location\": \"logs\/*.log\"\r\n}",
+        "logs": "{\r\n    \"custom\": true,\r\n    \"location\": \"logs/*.log\"\r\n}",
         "stop": "^C",
         "custom": "{}",
         "wispignore": null
     },
     "scripts": {
         "installation": {
-            "script": "#!\/bin\/bash\n# s&box install script \u2014 YorkHost egg\n#\n# Runs once in the panel's install container (Pterodactyl\/Pelican) against\n# \/mnt\/server (which becomes \/home\/container at runtime). Goals:\n#   1. Bootstrap SteamCMD inside the server volume.\n#   2. Prefetch the s&box Windows server depot (app 1892930) so the first\n#      container boot does not depend on a SteamCMD round-trip to Valve.\n#   3. Create the directory skeleton the entrypoint expects.\n#\n# Failure of the prefetch is non-fatal \u2014 the runtime entrypoint will retry\n# (SBOX_AUTO_UPDATE=1 by default), so the worst case is the original upstream\n# behaviour (first boot pays the SteamCMD cost).\nset -e\n\nAPP_ID=\"${SBOX_APP_ID:-1892930}\"\nBRANCH=\"${SBOX_BRANCH:-}\"\nPLATFORM=\"windows\"\n\nexport DEBIAN_FRONTEND=noninteractive\ndpkg --add-architecture i386\napt-get update -qq\napt-get install -y --no-install-recommends \\\n    ca-certificates \\\n    curl \\\n    tar \\\n    lib32gcc-s1 \\\n    >\/dev\/null\n\ncd \/mnt\/server\nmkdir -p sbox projects logs steamcmd .wine\n\nif [ ! -f steamcmd\/steamcmd.sh ]; then\n    echo \"[install] downloading SteamCMD...\"\n    curl -fsSL https:\/\/steamcdn-a.akamaihd.net\/client\/installer\/steamcmd_linux.tar.gz \\\n        | tar -xz -C steamcmd\n    chmod +x steamcmd\/steamcmd.sh\nfi\n\necho \"[install] prefetching s&box server (app ${APP_ID}, platform ${PLATFORM}${BRANCH:+, branch ${BRANCH}})...\"\n\nSTEAM_ARGS=(\n    +@ShutdownOnFailedCommand 1\n    +@NoPromptForPassword 1\n    +@sSteamCmdForcePlatformType \"${PLATFORM}\"\n    +force_install_dir \/mnt\/server\/sbox\n    +login anonymous\n    +app_update \"${APP_ID}\"\n)\n\nif [ -n \"${BRANCH}\" ]; then\n    STEAM_ARGS+=( -beta \"${BRANCH}\" )\nfi\n\nSTEAM_ARGS+=( validate +quit )\n\nif ! .\/steamcmd\/steamcmd.sh \"${STEAM_ARGS[@]}\"; then\n    echo \"[install] SteamCMD prefetch failed; runtime updater will retry on first boot\"\nfi\n\nif [ -f sbox\/sbox-server.exe ]; then\n    echo \"[install] prefetch ok: sbox\/sbox-server.exe is present\"\nelse\n    echo \"[install] warn: sbox-server.exe missing \u2014 first boot will rely on the runtime updater\"\nfi\n\necho \"[install] done.\"\n",
+            "script": "#!/bin/bash\n# s&box install script — YorkHost egg\n#\n# Runs once in the panel's install container (Pterodactyl/Pelican) against\n# /mnt/server (which becomes /home/container at runtime). Goals:\n#   1. Bootstrap SteamCMD inside the server volume.\n#   2. Prefetch the s&box Windows server depot (app 1892930) so the first\n#      container boot does not depend on a SteamCMD round-trip to Valve.\n#   3. Create the directory skeleton the entrypoint expects.\n#\n# Failure of the prefetch is non-fatal — the runtime entrypoint will retry\n# (SBOX_AUTO_UPDATE=1 by default), so the worst case is the original upstream\n# behaviour (first boot pays the SteamCMD cost).\nset -e\n\nAPP_ID=\"${SBOX_APP_ID:-1892930}\"\nBRANCH=\"${SBOX_BRANCH:-}\"\nPLATFORM=\"windows\"\n\nexport DEBIAN_FRONTEND=noninteractive\ndpkg --add-architecture i386\napt-get update -qq\napt-get install -y --no-install-recommends \\\n    ca-certificates \\\n    curl \\\n    tar \\\n    lib32gcc-s1 \\\n    >/dev/null\n\ncd /mnt/server\nmkdir -p sbox projects logs steamcmd .wine\n\nif [ ! -f steamcmd/steamcmd.sh ]; then\n    echo \"[install] downloading SteamCMD...\"\n    curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \\\n        | tar -xz -C steamcmd\n    chmod +x steamcmd/steamcmd.sh\nfi\n\necho \"[install] prefetching s&box server (app ${APP_ID}, platform ${PLATFORM}${BRANCH:+, branch ${BRANCH}})...\"\n\nSTEAM_ARGS=(\n    +@ShutdownOnFailedCommand 1\n    +@NoPromptForPassword 1\n    +@sSteamCmdForcePlatformType \"${PLATFORM}\"\n    +force_install_dir /mnt/server/sbox\n    +login anonymous\n    +app_update \"${APP_ID}\"\n)\n\nif [ -n \"${BRANCH}\" ]; then\n    STEAM_ARGS+=( -beta \"${BRANCH}\" )\nfi\n\nSTEAM_ARGS+=( validate +quit )\n\nprefetch_ok=0\nif ./steamcmd/steamcmd.sh \"${STEAM_ARGS[@]}\"; then\n    prefetch_ok=1\nelse\n    # A failed/interrupted app_update poisons appmanifest_<appid>.acf, after which\n    # SteamCMD aborts instantly (\"state is 0x402\") on every later run. Clear it\n    # and retry once so the prefetch can actually seed sbox-server.exe.\n    MANIFEST=\"/mnt/server/sbox/steamapps/appmanifest_${APP_ID}.acf\"\n    if [ -f \"${MANIFEST}\" ]; then\n        echo \"[install] clearing stale Steam app manifest ${MANIFEST} and retrying prefetch once\"\n        rm -f \"${MANIFEST}\"\n    else\n        echo \"[install] prefetch failed; retrying once\"\n    fi\n    if ./steamcmd/steamcmd.sh \"${STEAM_ARGS[@]}\"; then\n        prefetch_ok=1\n    fi\nfi\n\nif [ \"${prefetch_ok}\" -ne 1 ]; then\n    echo \"[install] SteamCMD prefetch failed; runtime updater will retry on first boot\"\nfi\n\nif [ -f sbox/sbox-server.exe ]; then\n    echo \"[install] prefetch ok: sbox/sbox-server.exe is present\"\nelse\n    echo \"[install] warn: sbox-server.exe missing — first boot will rely on the runtime updater\"\nfi\n\necho \"[install] done.\"\n",
             "container": "debian:bookworm-slim",
             "entrypoint": "bash"
         },
@@ -60,7 +60,7 @@
         {
             "sort_order": 3,
             "name": "Map",
-            "description": "Optional map\/package identifier loaded after +game. Leave blank to use the game default (for example: facepunch.flatgrass).",
+            "description": "Optional map/package identifier loaded after +game. Leave blank to use the game default (for example: facepunch.flatgrass).",
             "env_variable": "MAP",
             "default_value": "",
             "tickable": false,
@@ -71,7 +71,7 @@
         {
             "sort_order": 4,
             "name": "Local Project (.sbproj)",
-            "description": "Optional local .sbproj target for +game. File must exist under \/home\/container\/projects\/; enter only relative folder\/file (for example: richman\/richman.sbproj).",
+            "description": "Optional local .sbproj target for +game. File must exist under /home/container/projects/; enter only relative folder/file (for example: richman/richman.sbproj).",
             "env_variable": "SBOX_PROJECT",
             "default_value": "",
             "tickable": false,
@@ -159,7 +159,7 @@
         {
             "sort_order": 12,
             "name": "SteamCMD Timeout (seconds)",
-            "description": "Maximum time to wait for each SteamCMD probe\/update call before continuing startup (0 disables timeout).",
+            "description": "Maximum time to wait for each SteamCMD probe/update call before continuing startup (0 disables timeout).",
             "env_variable": "SBOX_STEAMCMD_TIMEOUT",
             "default_value": "600",
             "tickable": false,
@@ -214,7 +214,7 @@
         {
             "sort_order": null,
             "name": "Cloud Server ID",
-            "description": "Optional cloud-sync server identifier (for gamemodes such as DarkRP.xyz \u2014 get it from https:\/\/darkrp.xyz\/dashboard). Passed as +server_id.",
+            "description": "Optional cloud-sync server identifier (for gamemodes such as DarkRP.xyz — get it from https://darkrp.xyz/dashboard). Passed as +server_id.",
             "env_variable": "SERVER_ID",
             "default_value": "",
             "tickable": false,
@@ -225,7 +225,7 @@
         {
             "sort_order": null,
             "name": "Cloud Server Key",
-            "description": "Optional cloud-sync server secret (for gamemodes such as DarkRP.xyz \u2014 get it from https:\/\/darkrp.xyz\/dashboard). Passed as +server_key. Redacted from container logs.",
+            "description": "Optional cloud-sync server secret (for gamemodes such as DarkRP.xyz — get it from https://darkrp.xyz/dashboard). Passed as +server_key. Redacted from container logs.",
             "env_variable": "SERVER_KEY",
             "default_value": "",
             "tickable": false,

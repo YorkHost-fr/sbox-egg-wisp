@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## 2026-06-17 — fix: server never boots (SteamCMD windows-platform / poisoned manifest)
+
+Symptom: on boot the auto-update logged
+`steamcmd.sh: Couldn't find steamcmd at .../Steam/steamcmd/windows/steamcmd, exiting`,
+then `sbox-server.exe was not found`, and the server crash-looped (exit 1).
+Install-time prefetch also failed with `Error! App '1892930' state is 0x402`.
+
+### Root causes
+1. **`STEAM_PLATFORM=windows` (Dockerfile ENV).** The `steamcmd/steamcmd:alpine`
+   base wrapper reads `STEAM_PLATFORM` to choose which *client binary* to exec,
+   so it looked for a windows-native steamcmd that doesn't exist on Linux and
+   exited before any update could run. The windows platform must be selected
+   only for *content* via `+@sSteamCmdForcePlatformType`, never via env.
+2. **SteamCMD resolved to the wrong launcher.** `resolve_steamcmd_binary` only
+   checked the distro wrappers.
+3. **Poisoned appmanifest.** A failed `app_update` leaves
+   `appmanifest_1892930.acf` in a failure state (0x402); every later run then
+   aborts instantly without downloading.
+
+### Yolk/Dockerfile
+- Runtime base switched from `steamcmd/steamcmd:alpine` to `debian:trixie-slim`
+  (same family as the builder stage → baked Wine prefix is binary-compatible).
+- Removed `ENV STEAM_PLATFORM=windows`; added `STEAMCMD_DIR=/opt/steamcmd`.
+- Ship the Valve SteamCMD tarball at `/opt/steamcmd` (world-writable for the
+  arbitrary Wings UID + self-update); install Debian wine + 32-bit libs.
+
+### Yolk/entrypoint.sh
+- `resolve_steamcmd_binary` now prefers `${STEAMCMD_DIR}/steamcmd.sh` (Valve
+  launcher, always linux32) and runs it via `bash`; no windows-binary lookup.
+- Dropped the Debian-only `LD_LIBRARY_PATH`; HOME pinned to the server volume.
+- Added `clear_steam_appmanifest` + `dump_steamcmd_stderr`; on update failure
+  the manifest is cleared and the update retried once with validate.
+
+### Yolk/install.sh
+- Prefetch now clears a poisoned manifest and retries once (still non-fatal).
+
 ## 2026-04-28 — port handling + .NET bump + egg variable visibility
 
 ### Yolk/entrypoint.sh

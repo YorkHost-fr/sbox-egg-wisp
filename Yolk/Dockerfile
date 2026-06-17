@@ -73,9 +73,21 @@ RUN if ! find /work/wineprefix/drive_c -name hostfxr.dll 2>/dev/null | grep -q .
     fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 2: Runtime (SteamCMD Alpine base + Wine runtime)
+# Stage 2: Runtime (Debian Trixie + Wine + Valve SteamCMD tarball)
+#
+# CHANGED (YorkHost fix, 2026-06): the runtime used to be
+# `steamcmd/steamcmd:alpine` with ENV STEAM_PLATFORM=windows. That image's
+# steamcmd wrapper reads STEAM_PLATFORM to decide which client binary to exec,
+# so it looked for $HOME/.local/share/Steam/steamcmd/windows/steamcmd — which
+# does not exist (there is no native windows steamcmd on Linux) — and exited.
+# The boot-time auto-update could therefore never run and sbox-server.exe was
+# never fetched. We now run on Debian Trixie (same family as the builder stage,
+# so the baked Wine prefix is binary-compatible) and ship the Valve SteamCMD
+# tarball at /opt/steamcmd. steamcmd.sh always runs the linux32 client; the
+# windows platform is selected only for *content* via the explicit
+# +@sSteamCmdForcePlatformType flag in entrypoint.sh — no windows-binary lookup.
 # ─────────────────────────────────────────────────────────────────────────────
-FROM steamcmd/steamcmd:alpine
+FROM debian:trixie-slim
 
 LABEL org.opencontainers.image.title="s&box YorkHost egg" \
       org.opencontainers.image.description="s&box dedicated server image for Pterodactyl/Pelican (YorkHost)" \
@@ -83,10 +95,10 @@ LABEL org.opencontainers.image.title="s&box YorkHost egg" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="YorkHost"
 
-ARG PUID=999
-ARG PGID=999
+ARG DEBIAN_FRONTEND=noninteractive
 
-# Runtime defaults
+# Runtime defaults.
+# NOTE: STEAM_PLATFORM is intentionally NOT set (see Stage 2 header).
 ENV CONTAINER_HOME=/home/container \
     HOME=/home/container \
     WINEPREFIX=/home/container/.wine \
@@ -94,12 +106,12 @@ ENV CONTAINER_HOME=/home/container \
     WINEDEBUG=-all \
     WINEDLLOVERRIDES=icu,icuuc=d \
     SBOX_BAKED_WINEPREFIX=/opt/sbox-wine-prefix \
+    STEAMCMD_DIR=/opt/steamcmd \
     SBOX_APP_ID=1892930 \
     SBOX_INSTALL_DIR=/home/container/sbox \
     SBOX_SERVER_EXE=/home/container/sbox/sbox-server.exe \
     SBOX_AUTO_UPDATE=1 \
     SBOX_LOG_KEEP=10 \
-    STEAM_PLATFORM=windows \
     DOTNET_EnableWriteXorExecute=0 \
     DOTNET_TieredCompilation=0 \
     DOTNET_ReadyToRun=0 \
@@ -111,15 +123,44 @@ ENV CONTAINER_HOME=/home/container \
     SBOX_EXTRA_ARGS= \
     XDG_RUNTIME_DIR=/tmp
 
-RUN apk add --no-cache \
-                bash \
-                ca-certificates \
-                gnutls \
-                libgcc \
-                libstdc++ \
-                tar \
-                wget \
-                wine
+# i386 + contrib/non-free for wine32 (same component set as the builder stage so
+# the runtime wine matches the wine that created the baked prefix).
+RUN dpkg --add-architecture i386 \
+    && sed -i 's/^Components: main$/& contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       bash \
+       ca-certificates \
+       coreutils \
+       curl \
+       tar \
+       tzdata \
+       lib32gcc-s1 \
+       libgcc-s1 \
+       libstdc++6 \
+       libstdc++6:i386 \
+       libfreetype6 \
+       libfreetype6:i386 \
+       wine \
+       wine32 \
+       wine64 \
+       libwine \
+       libwine:i386 \
+       fonts-wine \
+       winbind \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Valve SteamCMD tarball (NOT a distro package / not the alpine wrapper). Wings
+# runs the container under an arbitrary UID that won't own this dir, and SteamCMD
+# self-updates by rewriting its own directory on first run, so it must be
+# world-writable. It's an ephemeral in-image dir, so 0777 is harmless.
+RUN mkdir -p "${STEAMCMD_DIR}" \
+    && curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+       | tar -xz -C "${STEAMCMD_DIR}" \
+    && chmod +x "${STEAMCMD_DIR}/steamcmd.sh" \
+    && find "${STEAMCMD_DIR}" -type f -name steamcmd -exec chmod +x {} + \
+    && chmod -R 0777 "${STEAMCMD_DIR}"
 
 RUN mkdir -p \
         /home/container/.wine \
