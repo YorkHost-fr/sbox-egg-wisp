@@ -369,6 +369,20 @@ update_sbox() {
     steam_args+=( validate +quit )
     steam_args_retry+=( +quit )
 
+    # Warm-up run: on its first launch in a fresh container SteamCMD self-updates
+    # and re-execs, and that first process frequently exits non-zero even though
+    # SteamCMD is perfectly fine ("Checking for available update... Download
+    # Complete"). Without this, the probe below sees that non-zero, declares the
+    # probe failed, SKIPS the app_update, and the server boots on stale files
+    # forever — which causes content/engine version mismatches ("Old shader needs
+    # to be recompiled", missing *.vmdl_c/*.group_c) once asset.party content
+    # moves ahead of the installed build. We absorb the self-update here and
+    # ignore its exit code on purpose.
+    log_info "warming up SteamCMD (absorbing first-run self-update)..."
+    set +e
+    run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" "${probe_args[@]}" >/dev/null 2>&1
+    set -e
+
     set +e
     run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" "${probe_args[@]}" 2>&1 | tee -a "${UPDATE_LOG}"
     steamcmd_status=${PIPESTATUS[0]}
