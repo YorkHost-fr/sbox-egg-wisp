@@ -20,6 +20,10 @@ STEAMCMD_EXTRA_ARGS="${STEAMCMD_EXTRA_ARGS:-}"
 # Optional server configuration variables
 GAME="${GAME:-}"
 MAP="${MAP:-}"
+# Some scene-based gamemodes (e.g. several RP gamemodes) need an explicit
+# startup scene instead of, or in addition to, a positional map. Empty by
+# default; only emitted on the command line when set. See run_sbox().
+SERVER_STARTUP_SCENE="${SERVER_STARTUP_SCENE:-}"
 SERVER_NAME="${SERVER_NAME:-}"
 SERVER_DESCRIPTION="${SERVER_DESCRIPTION:-}"
 TICKRATE="${TICKRATE:-}"
@@ -347,6 +351,24 @@ steamcmd_update_succeeded() {
         || grep -q "already up to date" "${UPDATE_LOG}" 2>/dev/null
 }
 
+warmup_steamcmd() {
+    # Absorb SteamCMD's first-run self-update + re-exec. The very first SteamCMD
+    # invocation in a fresh container (or the first after Valve ships a new
+    # client) is consumed entirely by its own self-update: it prints
+    # "Checking for available update... Download Complete" and EXITS without ever
+    # running login/app_update. In the Wings container the steamcmd.sh re-exec
+    # can drop the trailing app_update args, so looping the real command is not
+    # enough on its own. Running a throwaway "+quit" first lets the client update
+    # and settle, so the real app_update that follows starts from an up-to-date
+    # client. Non-fatal: a failure here just means the update loop pays the cost.
+    log_info "warming up SteamCMD (absorbing first-run self-update)..."
+    set +e
+    run_steamcmd_with_timeout "${SBOX_STEAMCMD_TIMEOUT}" \
+        +@ShutdownOnFailedCommand 1 +@NoPromptForPassword 1 +quit \
+        >>"${UPDATE_LOG}" 2>&1
+    set -e
+}
+
 update_sbox() {
     local -a steam_args
     local -a steam_args_retry
@@ -372,12 +394,13 @@ update_sbox() {
     steam_args+=( validate +quit )
     steam_args_retry+=( +quit )
 
-    # SteamCMD's first invocation in a fresh container is consumed by its own
-    # self-update: it prints "Checking for available update... Download Complete"
-    # and EXITS without ever running login/app_update. The next invocation finds
-    # itself up to date and actually performs the update. A single warm-up isn't
-    # reliable, so we loop the real app_update and stop as soon as SteamCMD's own
-    # log says the app is fully installed (its exit code is not trustworthy).
+    # Warm-up first so the real app_update is not eaten by the self-update.
+    warmup_steamcmd
+
+    # The real app_update is then looped as a safety net: we stop as soon as
+    # SteamCMD's own log says the app is fully installed (its exit code is not
+    # trustworthy). The warm-up above means the FIRST attempt below should
+    # already perform the download instead of self-updating again.
     local attempt=0
     local max_attempts="${SBOX_STEAMCMD_MAX_ATTEMPTS:-4}"
     local manifest_cleared=0
@@ -444,6 +467,8 @@ run_sbox() {
     local project_target=""
     local resolved_server_name="${SERVER_NAME}"
     local cli_has_game_flag=0
+    local cli_has_map_flag=0
+    local cli_has_scene_flag=0
     local cli_arg=""
 
     if [ ! -f "${SBOX_SERVER_EXE}" ]; then
@@ -454,22 +479,25 @@ run_sbox() {
 
     project_target="$(resolve_project_target)"
 
+    # Detect flags already present in the panel startup command so we never pass
+    # them twice (a duplicate +map / +server_startup_scene confuses the engine).
     for cli_arg in "${cli_args[@]}"; do
-        if [ "${cli_arg}" = "+game" ]; then
-            cli_has_game_flag=1
-            break
-        fi
+        case "${cli_arg}" in
+            +game) cli_has_game_flag=1 ;;
+            +map) cli_has_map_flag=1 ;;
+            +server_startup_scene) cli_has_scene_flag=1 ;;
+        esac
     done
 
     if [ -n "${project_target}" ]; then
         ensure_project_libraries_dir "${project_target}"
         args+=( +game "${project_target}" )
-        if [ -n "${MAP}" ]; then
+        if [ -n "${MAP}" ] && [ "${cli_has_map_flag}" = "0" ]; then
             args+=( "${MAP}" )
         fi
     elif [ -n "${GAME}" ]; then
         args+=( +game "${GAME}" )
-        if [ -n "${MAP}" ]; then
+        if [ -n "${MAP}" ] && [ "${cli_has_map_flag}" = "0" ]; then
             args+=( "${MAP}" )
         fi
     elif [ "${cli_has_game_flag}" = "1" ]; then
@@ -477,6 +505,16 @@ run_sbox() {
     else
         log_error "missing startup target; set a project target (SBOX_PROJECT) or provide GAME and MAP (current: GAME='${GAME:-}', MAP='${MAP:-}')"
         exit 1
+    fi
+
+    # Optional explicit startup scene. Scene-based gamemodes (several RP
+    # gamemodes, including Dxura's RP depending on its release) need this so the
+    # engine's Fitter has a world to host. Without a map AND without a scene the
+    # server reaches "Bootstrap Networking", logs
+    # "[Fitter] Map set to '' with fitting 'null'", and crashes (exit 1). Only
+    # emitted when set and not already supplied in the startup command.
+    if [ -n "${SERVER_STARTUP_SCENE}" ] && [ "${cli_has_scene_flag}" = "0" ]; then
+        args+=( +server_startup_scene "${SERVER_STARTUP_SCENE}" )
     fi
 
     # Backward compatibility: use HOSTNAME only when SERVER_NAME is empty and
@@ -516,7 +554,7 @@ run_sbox() {
         args+=( +tickrate "${TICKRATE}" )
     fi
 
-    # Adds Max Players argument if the variable is set and greater than 0 or "" 
+    # Adds Max Players argument if the variable is set and greater than 0 or ""
     if [ -n "${MAX_PLAYERS}" ] && [ "${MAX_PLAYERS}" -gt 0 ]; then
         args+=( +maxplayers "${MAX_PLAYERS}" )
     fi
@@ -560,9 +598,8 @@ run_sbox() {
     )
 
     # Build a redacted version of the command line for logs. Any flag listed
-    # in `redacted_flags` causes the immediately-following value to be replaced
-    # with [REDACTED]. The previous implementation referenced an unset
-    # `skip_next` variable and ended up leaking the actual token value.
+    # below causes the immediately-following value to be replaced with
+    # [REDACTED] so tokens/secrets never leak into the panel console.
     local skip_next=0
     local arg=""
     for arg in "${args[@]}"; do
@@ -612,7 +649,7 @@ if [ "${1:-}" = "" ] || [[ "${1}" = +* ]]; then
         log_info "updating S&Box server files on boot..."
         update_sbox
     fi
-    
+
     run_sbox "$@"
 fi
 

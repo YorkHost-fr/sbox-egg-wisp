@@ -3,6 +3,7 @@
 # The image ships only what is **expensive to provision at runtime**:
 #   - Wine runtime
 #   - A pre-baked Wine prefix with Windows .NET 10 installed
+#   - A pre-bootstrapped Valve SteamCMD (self-update already absorbed)
 #
 # The s&box server files themselves are NOT baked. They are fetched by the
 # panel install script (Yolk/install.sh) via SteamCMD into /home/container/sbox
@@ -11,9 +12,9 @@
 # Two-stage build:
 #   Stage 1 (builder): installs Wine on Debian, creates a Wine prefix,
 #     installs Windows .NET 10 via Wine, and copies the prefix out.
-#   Stage 2 (runtime): steamcmd/steamcmd:alpine + Wine apk. Baked prefix is
-#     copied to /opt/sbox-wine-prefix. entrypoint.sh seeds it into the
-#     /home/container volume on first boot.
+#   Stage 2 (runtime): debian:trixie-slim + Wine + the Valve SteamCMD tarball.
+#     Baked prefix is copied to /opt/sbox-wine-prefix. entrypoint.sh seeds it
+#     into the /home/container volume on first boot.
 #
 # Build from repo root:
 #   docker build --platform linux/amd64 \
@@ -118,6 +119,7 @@ ENV CONTAINER_HOME=/home/container \
     DOTNET_ZapDisable=1 \
     GAME= \
     MAP= \
+    SERVER_STARTUP_SCENE= \
     SERVER_NAME= \
     SBOX_PROJECT= \
     SBOX_EXTRA_ARGS= \
@@ -160,6 +162,16 @@ RUN mkdir -p "${STEAMCMD_DIR}" \
        | tar -xz -C "${STEAMCMD_DIR}" \
     && chmod +x "${STEAMCMD_DIR}/steamcmd.sh" \
     && find "${STEAMCMD_DIR}" -type f -name steamcmd -exec chmod +x {} + \
+    && chmod -R 0777 "${STEAMCMD_DIR}"
+
+# Warm up SteamCMD AT BUILD TIME so its first-run self-update + re-exec is
+# already absorbed in the image. Without this, the very first runtime boot wastes
+# an update cycle on the self-update ("Checking for available update... Download
+# Complete" with no app_update) and falls back to whatever server files happen
+# to be on disk — which is exactly how a server ends up booting a stale build.
+# A throwaway "+quit" downloads + finalises the linux32 client into ${STEAMCMD_DIR};
+# re-chmod afterwards because the self-update rewrites files with build-time perms.
+RUN HOME=/tmp bash "${STEAMCMD_DIR}/steamcmd.sh" +@ShutdownOnFailedCommand 1 +@NoPromptForPassword 1 +quit 2>/dev/null || true \
     && chmod -R 0777 "${STEAMCMD_DIR}"
 
 RUN mkdir -p \

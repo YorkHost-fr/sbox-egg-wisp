@@ -37,6 +37,12 @@ if [ ! -f steamcmd/steamcmd.sh ]; then
     chmod +x steamcmd/steamcmd.sh
 fi
 
+# Warm-up: SteamCMD's first invocation is consumed by its own self-update and
+# never runs app_update. Absorb that with a throwaway +quit so the prefetch
+# below actually downloads the depot instead of self-updating again. Non-fatal.
+echo "[install] warming up SteamCMD (absorbing first-run self-update)..."
+./steamcmd/steamcmd.sh +@ShutdownOnFailedCommand 1 +@NoPromptForPassword 1 +quit || true
+
 echo "[install] prefetching s&box server (app ${APP_ID}, platform ${PLATFORM}${BRANCH:+, branch ${BRANCH}})..."
 
 STEAM_ARGS=(
