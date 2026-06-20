@@ -1,20 +1,18 @@
-# s&box YorkHost egg — minimal Docker image
+# s&box YorkHost egg — Docker image (ALPINE runtime)
 #
-# The image ships only what is **expensive to provision at runtime**:
-#   - Wine runtime
-#   - A pre-baked Wine prefix with Windows .NET 10 installed
-#   - A pre-bootstrapped Valve SteamCMD (self-update already absorbed)
+# WHY ALPINE RUNTIME (2026-06-20):
+#   The Debian Trixie Wine (glibc) crashes at Steam networking init under our
+#   node networking ("Assertion Failed: CalcUnIPThisBox - GetAdaptersAddresses
+#   returned 13" -> exit 1, right after "Bootstrap Networking"). The SAME server,
+#   on the SAME node, boots fine on Alpine Wine (musl) — proven against
+#   mydrissjlv's image. So the runtime Wine is the differentiator, not the node
+#   network. We keep our Debian builder (it bakes the Wine prefix + Windows .NET
+#   exactly like before) but RUN the server on Alpine Wine.
 #
-# The s&box server files themselves are NOT baked. They are fetched by the
-# panel install script (Yolk/install.sh) via SteamCMD into /home/container/sbox
-# at server creation, and kept current at runtime by the entrypoint.
-#
-# Two-stage build:
-#   Stage 1 (builder): installs Wine on Debian, creates a Wine prefix,
-#     installs Windows .NET 10 via Wine, and copies the prefix out.
-#   Stage 2 (runtime): debian:trixie-slim + Wine + the Valve SteamCMD tarball.
-#     Baked prefix is copied to /opt/sbox-wine-prefix. entrypoint.sh seeds it
-#     into the /home/container volume on first boot.
+# We keep our working SteamCMD setup (Valve tarball at /opt/steamcmd + the
+# build-time warm-up + the entrypoint warm-up/loop), so the auto-update keeps
+# completing for real — unlike the prebaked-only upstreams that fall back to a
+# stale build.
 #
 # Build from repo root:
 #   docker build --platform linux/amd64 \
@@ -25,7 +23,11 @@
 # Originally based on HyberHost/gameforge-sbox-egg (MIT).
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 1: Builder — bakes the Wine prefix + Windows .NET
+# Stage 1: Builder — bakes the Wine prefix + Windows .NET (Debian, unchanged)
+#
+# The prefix is mostly registry/config and is portable: a Debian-built prefix
+# runs fine under Alpine Wine at runtime (this is exactly what mydrissjlv's
+# working image does).
 # ─────────────────────────────────────────────────────────────────────────────
 FROM debian:trixie-slim AS builder
 
@@ -74,29 +76,22 @@ RUN if ! find /work/wineprefix/drive_c -name hostfxr.dll 2>/dev/null | grep -q .
     fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 2: Runtime (Debian Trixie + Wine + Valve SteamCMD tarball)
+# Stage 2: Runtime — Alpine + Wine (musl). This is the actual fix.
 #
-# CHANGED (YorkHost fix, 2026-06): the runtime used to be
-# `steamcmd/steamcmd:alpine` with ENV STEAM_PLATFORM=windows. That image's
-# steamcmd wrapper reads STEAM_PLATFORM to decide which client binary to exec,
-# so it looked for $HOME/.local/share/Steam/steamcmd/windows/steamcmd — which
-# does not exist (there is no native windows steamcmd on Linux) — and exited.
-# The boot-time auto-update could therefore never run and sbox-server.exe was
-# never fetched. We now run on Debian Trixie (same family as the builder stage,
-# so the baked Wine prefix is binary-compatible) and ship the Valve SteamCMD
-# tarball at /opt/steamcmd. steamcmd.sh always runs the linux32 client; the
-# windows platform is selected only for *content* via the explicit
-# +@sSteamCmdForcePlatformType flag in entrypoint.sh — no windows-binary lookup.
+# Base is steamcmd/steamcmd:alpine (same family mydrissjlv runs on) which already
+# ships the glibc shim needed to run the Valve SteamCMD linux32 client, so our
+# /opt/steamcmd tarball runs here too. We DO NOT set STEAM_PLATFORM (that env is
+# what made the alpine steamcmd wrapper look for a non-existent windows binary);
+# the windows depot is selected only for content via +@sSteamCmdForcePlatformType
+# inside entrypoint.sh.
 # ─────────────────────────────────────────────────────────────────────────────
-FROM debian:trixie-slim
+FROM steamcmd/steamcmd:alpine
 
 LABEL org.opencontainers.image.title="s&box YorkHost egg" \
-      org.opencontainers.image.description="s&box dedicated server image for Pterodactyl/Pelican (YorkHost)" \
+      org.opencontainers.image.description="s&box dedicated server image for Pterodactyl/Pelican (YorkHost) — Alpine Wine runtime" \
       org.opencontainers.image.source="https://github.com/YorkHost-fr/s-box-egg-wisp" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="YorkHost"
-
-ARG DEBIAN_FRONTEND=noninteractive
 
 # Runtime defaults.
 # NOTE: STEAM_PLATFORM is intentionally NOT set (see Stage 2 header).
@@ -125,38 +120,25 @@ ENV CONTAINER_HOME=/home/container \
     SBOX_EXTRA_ARGS= \
     XDG_RUNTIME_DIR=/tmp
 
-# i386 + contrib/non-free for wine32 (same component set as the builder stage so
-# the runtime wine matches the wine that created the baked prefix).
-RUN dpkg --add-architecture i386 \
-    && sed -i 's/^Components: main$/& contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-       bash \
-       ca-certificates \
-       coreutils \
-       curl \
-       tar \
-       tzdata \
-       lib32gcc-s1 \
-       libgcc-s1 \
-       libstdc++6 \
-       libstdc++6:i386 \
-       libfreetype6 \
-       libfreetype6:i386 \
-       wine \
-       wine32 \
-       wine64 \
-       libwine \
-       libwine:i386 \
-       fonts-wine \
-       winbind \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# Wine + the libraries it needs, via apk (musl). Mirrors the dependency set of
+# the known-good Alpine s&box image. No winbind (not required for s&box).
+RUN apk add --no-cache \
+        bash \
+        ca-certificates \
+        coreutils \
+        curl \
+        tar \
+        tzdata \
+        gnutls \
+        libgcc \
+        libstdc++ \
+        freetype \
+        fontconfig \
+        wine
 
-# Valve SteamCMD tarball (NOT a distro package / not the alpine wrapper). Wings
-# runs the container under an arbitrary UID that won't own this dir, and SteamCMD
-# self-updates by rewriting its own directory on first run, so it must be
-# world-writable. It's an ephemeral in-image dir, so 0777 is harmless.
+# Valve SteamCMD tarball at /opt/steamcmd. World-writable: Wings runs the
+# container under an arbitrary UID and SteamCMD self-updates by rewriting its own
+# dir. The steamcmd/steamcmd:alpine base provides the glibc compat to run it.
 RUN mkdir -p "${STEAMCMD_DIR}" \
     && curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
        | tar -xz -C "${STEAMCMD_DIR}" \
@@ -164,13 +146,8 @@ RUN mkdir -p "${STEAMCMD_DIR}" \
     && find "${STEAMCMD_DIR}" -type f -name steamcmd -exec chmod +x {} + \
     && chmod -R 0777 "${STEAMCMD_DIR}"
 
-# Warm up SteamCMD AT BUILD TIME so its first-run self-update + re-exec is
-# already absorbed in the image. Without this, the very first runtime boot wastes
-# an update cycle on the self-update ("Checking for available update... Download
-# Complete" with no app_update) and falls back to whatever server files happen
-# to be on disk — which is exactly how a server ends up booting a stale build.
-# A throwaway "+quit" downloads + finalises the linux32 client into ${STEAMCMD_DIR};
-# re-chmod afterwards because the self-update rewrites files with build-time perms.
+# Warm up SteamCMD at build time so its first-run self-update is already absorbed
+# in the image; the first runtime boot then runs app_update immediately.
 RUN HOME=/tmp bash "${STEAMCMD_DIR}/steamcmd.sh" +@ShutdownOnFailedCommand 1 +@NoPromptForPassword 1 +quit 2>/dev/null || true \
     && chmod -R 0777 "${STEAMCMD_DIR}"
 
